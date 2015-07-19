@@ -1,0 +1,9 @@
+[submodule "Arduino-Makefile"]
+	path = Arduino-Makefile
+	url = https://github.com/sudar/Arduino-Makefile.git
+[submodule "irrigation-arduino/libs/Arduino-SerialCommand"]
+	path = irrigation-arduino/libs/Arduino-SerialCommand
+	url = https://github.com/kroimon/Arduino-SerialCommand.git
+[submodule "irrigation-arduino/libs/Time"]
+	path = irrigation-arduino/libs/Time
+	url = https://github.com/PaulStoffregen/Time.git
