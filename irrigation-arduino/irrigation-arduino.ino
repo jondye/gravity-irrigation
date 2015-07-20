@@ -122,6 +122,40 @@ void unrecognized_command(const char *s)
   Serial.println(s);
 }
 
+void load_params()
+{
+  tap.open_position(EEPROM.read(PARAM_TAP_OPEN_POSITION));
+  tap.close_position(EEPROM.read(PARAM_TAP_CLOSE_POSITION));
+}
+
+enum State {
+  WAITING,
+  POWER_ON,
+  FILLING,
+  ERROR
+};
+
+State state = WAITING;
+long endTime = 0;
+
+bool timeout()
+{
+  return (long)(millis() - endTime) >= 0;
+}
+
+void setState(State s, long timeout)
+{
+  endTime = millis() + timeout;
+  state = s;
+}
+
+void start_watering()
+{
+  output_message("Watering...\nPowering on");
+  power_on();
+  setState(POWER_ON, 5000);
+}
+
 void setup_serial()
 {
   sCmd.addCommand("opentap", open_tap);
@@ -133,13 +167,8 @@ void setup_serial()
   sCmd.addCommand("poweron", power_on);
   sCmd.addCommand("poweroff", power_off);
   sCmd.addCommand("powerstatus", power_status);
+  sCmd.addCommand("water", start_watering);
   sCmd.setDefaultHandler(unrecognized_command);
-}
-
-void load_params()
-{
-  tap.open_position(EEPROM.read(PARAM_TAP_OPEN_POSITION));
-  tap.close_position(EEPROM.read(PARAM_TAP_CLOSE_POSITION));
 }
 
 void setup()
@@ -157,4 +186,24 @@ void loop()
 {
   sCmd.readSerial();
   tap.tick();
+
+  switch (state) {
+    case WAITING:
+      break;
+    case POWER_ON:
+      if (pump_supply() > 10.0 && servo_supply() > 4.0) {
+        output_message("Watering...\nFilling tank");
+        tap.close();
+        setState(FILLING, 1800000);
+      } else if (timeout()) {
+        output_message("ERROR: failed\nto power on");
+        setState(ERROR, 0);
+      }
+      break;
+    case FILLING:
+      break;
+    case ERROR:
+      power_off();
+      break;
+  }
 }
