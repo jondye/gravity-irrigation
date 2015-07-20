@@ -6,16 +6,51 @@
 
 enum
 {
+  SERVO_PIN = 9,
+  POWER_PIN = 7,
+  PUMP_SUPPLY_PIN = A0,
+  SERVO_SUPPLY_PIN = A1
+
+};
+
+enum
+{
   PARAM_TAP_OPEN_POSITION = 0,
   PARAM_TAP_CLOSE_POSITION = 1
 };
 
 SerialCommand sCmd;
-Tap tap(9);
+Tap tap(SERVO_PIN);
 
 void output_message(const char * message)
 {
   Serial.println(message);
+}
+
+void setup_power()
+{
+  digitalWrite(POWER_PIN, 0);
+  pinMode(POWER_PIN, OUTPUT);
+}
+
+void power_on()
+{
+  digitalWrite(POWER_PIN, 1);
+}
+
+void power_off()
+{
+  digitalWrite(POWER_PIN, 0);
+}
+
+float pump_supply()
+{
+  return analogRead(PUMP_SUPPLY_PIN) * (12.0 / 1023.0);
+}
+
+float servo_supply()
+{
+  return analogRead(SERVO_SUPPLY_PIN) * (5.0 / 1023.0);
 }
 
 void open_tap()
@@ -32,7 +67,7 @@ void close_tap()
 
 void set_tap_open()
 {
-  const int position = atoi(sCmd.next());
+  const byte position = atoi(sCmd.next());
   EEPROM.update(PARAM_TAP_OPEN_POSITION, position);
   tap.open_position(position);
   String message("Tap open pos\nset to ");
@@ -42,7 +77,7 @@ void set_tap_open()
 
 void set_tap_close()
 {
-  const int position = atoi(sCmd.next());
+  const byte position = atoi(sCmd.next());
   EEPROM.update(PARAM_TAP_CLOSE_POSITION, position);
   tap.close_position(position);
   String message("Tap close pos\nset to ");
@@ -75,24 +110,46 @@ void get_time()
   output_message(message.c_str());
 }
 
+void power_status()
+{
+  Serial.print("12v: ");
+  Serial.println(pump_supply());
+}
+
 void unrecognized_command(const char *s)
 {
   Serial.println("I didn't understand");
   Serial.println(s);
 }
 
+void setup_serial()
+{
+  sCmd.addCommand("opentap", open_tap);
+  sCmd.addCommand("closetap", close_tap);
+  sCmd.addCommand("settapopen", set_tap_open);
+  sCmd.addCommand("settapclose", set_tap_close);
+  sCmd.addCommand("settime", set_time);
+  sCmd.addCommand("gettime", get_time);
+  sCmd.addCommand("poweron", power_on);
+  sCmd.addCommand("poweroff", power_off);
+  sCmd.addCommand("powerstatus", power_status);
+  sCmd.setDefaultHandler(unrecognized_command);
+}
+
+void load_params()
+{
+  tap.open_position(EEPROM.read(PARAM_TAP_OPEN_POSITION));
+  tap.close_position(EEPROM.read(PARAM_TAP_CLOSE_POSITION));
+}
+
 void setup()
 {
   Serial.begin(9600);
-  sCmd.addCommand("OPEN_TAP", open_tap);
-  sCmd.addCommand("CLOSE_TAP", close_tap);
-  sCmd.addCommand("SET_TAP_OPEN", set_tap_open);
-  sCmd.addCommand("SET_TAP_CLOSE", set_tap_close);
-  sCmd.addCommand("SET_TIME", set_time);
-  sCmd.addCommand("GET_TIME", get_time);
-  sCmd.setDefaultHandler(unrecognized_command);
-  tap.open_position(EEPROM.read(PARAM_TAP_OPEN_POSITION));
-  tap.close_position(EEPROM.read(PARAM_TAP_CLOSE_POSITION));
+
+  setup_serial();
+  load_params();
+  setup_power();
+
   Serial.println("Please set the time");
 }
 

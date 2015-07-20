@@ -4,7 +4,7 @@
 class Tap
 {
 private:
-  static const int HOLD_TIME = 1000;
+  static const unsigned long HOLD_TIME = 1000;
 
 public:
   Tap(byte pin)
@@ -19,7 +19,7 @@ public:
 
   void open()
   {
-    endTime_ = now() + HOLD_TIME;
+    endTime_ = millis() + HOLD_TIME;
     servo_.attach(pin_);
     servo_.write(open_position_);
     state_ = Opening;
@@ -27,7 +27,7 @@ public:
 
   void close()
   {
-    endTime_ = now() + HOLD_TIME;
+    endTime_ = millis() + HOLD_TIME;
     servo_.attach(pin_);
     servo_.write(close_position_);
     state_ = Closing;
@@ -43,19 +43,26 @@ public:
     open_position_ = p;
   }
 
+  bool finished()
+  {
+    return (long)(millis()-endTime_) >= 0;
+  }
+
   void tick()
   {
     switch(state_) {
       case Stationary:
         break;
       case Opening:
-        if (now() >= endTime_) {
+        {
+        if (finished()) {
           servo_.detach();
           state_ = Stationary;
         }
+        }
         break;
       case Closing:
-        if (now() >= endTime_) {
+        if (finished()) {
           servo_.detach();
           state_ = Stationary;
         }
