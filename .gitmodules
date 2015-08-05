@@ -7,3 +7,6 @@
 [submodule "irrigation-arduino/libs/Time"]
 	path = irrigation-arduino/libs/Time
 	url = https://github.com/PaulStoffregen/Time.git
+[submodule "irrigation-arduino/libs/DS3232RTC"]
+	path = irrigation-arduino/libs/DS3232RTC
+	url = https://github.com/JChristensen/DS3232RTC.git

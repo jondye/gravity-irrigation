@@ -2,14 +2,18 @@
 #include <SerialCommand.h>
 #include <Servo.h>
 #include <Time.h>
+#include <Wire.h>  
+#include <DS3232RTC.h>
 #include "Tap.h"
 
 enum
 {
-  SERVO_PIN = 9,
-  POWER_PIN = 7,
-  PUMP_SUPPLY_PIN = A0,
-  SERVO_SUPPLY_PIN = A1
+  SERVO_PIN = 3,
+  POWER_PIN = 2,
+  BUTT_NOT_EMPTY_PIN = 6,
+  TANK_NOT_FULL_PIN = 8,
+  PUMP_SUPPLY_PIN = A1,
+  SERVO_SUPPLY_PIN = A3
 
 };
 
@@ -33,6 +37,25 @@ void setup_power()
   pinMode(POWER_PIN, OUTPUT);
 }
 
+float pump_supply()
+{
+  return analogRead(PUMP_SUPPLY_PIN) * (12.0 / 1023.0);
+}
+
+float servo_supply()
+{
+  return analogRead(SERVO_SUPPLY_PIN) * (5.0 / 1023.0);
+}
+
+void power_status()
+{
+  String message("12v: ");
+  message += pump_supply();
+  message += " 5v: ";
+  message += servo_supply();
+  output_message(message.c_str());
+}
+
 void power_on()
 {
   digitalWrite(POWER_PIN, 1);
@@ -43,14 +66,31 @@ void power_off()
   digitalWrite(POWER_PIN, 0);
 }
 
-float pump_supply()
+void setup_sensors()
 {
-  return analogRead(PUMP_SUPPLY_PIN) * (12.0 / 1023.0);
+  pinMode(BUTT_NOT_EMPTY_PIN, INPUT);
+  pinMode(TANK_NOT_FULL_PIN, INPUT);
 }
 
-float servo_supply()
+void sensor_state()
 {
-  return analogRead(SERVO_SUPPLY_PIN) * (5.0 / 1023.0);
+  String message("BUTT: ");
+  if (pump_supply() < 10) {
+    message += "  unknown";
+  } else if (digitalRead(BUTT_NOT_EMPTY_PIN)) {
+    message += "not empty";
+  } else {
+    message += "    empty";
+  }
+  message += " TANK: ";
+  if (pump_supply() < 10) {
+    message += " unknown";
+  } else if (digitalRead(TANK_NOT_FULL_PIN)) {
+    message += "not full";
+  } else {
+    message += "    full";
+  }
+  output_message(message.c_str());
 }
 
 void open_tap()
@@ -85,35 +125,43 @@ void set_tap_close()
   output_message(message.c_str());
 }
 
-void set_time()
-{
-  const int years = atoi(sCmd.next());
-  const int months = atoi(sCmd.next());
-  const int days = atoi(sCmd.next());
-  const int hours = atoi(sCmd.next());
-  const int minutes = atoi(sCmd.next());
-  const int seconds = atoi(sCmd.next());
-  String message("Setting time to\n");
-  message += String(years) + String("-") + String(months) + String("-") + String(days);
-  message += String(" ");
-  message += String(hours) + String(":") + String(minutes) + String(":") + String(seconds);
-  output_message(message.c_str());
-  setTime(hours, minutes, seconds, days, months, years);
-}
-
 void get_time()
 {
-  String message("Time now is\n");
-  message += year() + String("-") + month() + String("-") + day();
-  message += " ";
-  message += hour() + String(":") + minute() + String(":") + second();
-  output_message(message.c_str());
+  char message[28];
+  snprintf(
+    message, sizeof(message), "Time is %04u-%02u-%02uT%02u:%02u:%02u", 
+    year(), month(), day(), hour(), minute(), second());
+  output_message(message);
 }
 
-void power_status()
+void set_time()
 {
-  Serial.print("12v: ");
-  Serial.println(pump_supply());
+  TimeElements time = {};
+  time.Year = atoi(sCmd.next()) - 1970;
+  time.Month = atoi(sCmd.next());
+  time.Day = atoi(sCmd.next());
+  time.Hour = atoi(sCmd.next());
+  time.Minute = atoi(sCmd.next());
+  time.Second = atoi(sCmd.next());
+  const time_t tt = makeTime(time);
+  RTC.set(tt);
+  setTime(tt);
+}
+
+void time_status()
+{
+  switch(timeStatus())
+  {
+    case timeNotSet:
+      output_message("Time not set");
+      break;
+    case timeSet:
+      output_message("Time set");
+      break;
+    case timeNeedsSync:
+      output_message("Time needs sync");
+      break;
+  }
 }
 
 void unrecognized_command(const char *s)
@@ -164,22 +212,34 @@ void setup_serial()
   sCmd.addCommand("settapclose", set_tap_close);
   sCmd.addCommand("settime", set_time);
   sCmd.addCommand("gettime", get_time);
+  sCmd.addCommand("timestatus", time_status);
   sCmd.addCommand("poweron", power_on);
   sCmd.addCommand("poweroff", power_off);
   sCmd.addCommand("powerstatus", power_status);
+  sCmd.addCommand("sensors", sensor_state);
   sCmd.addCommand("water", start_watering);
   sCmd.setDefaultHandler(unrecognized_command);
+}
+
+void setup_clock()
+{
+  setSyncProvider(RTC.get);
+  if (timeStatus() != timeSet) {
+    output_message("Time not set");
+  } else {
+    get_time();
+  }
 }
 
 void setup()
 {
   Serial.begin(9600);
 
+  setup_clock();
   setup_serial();
   load_params();
   setup_power();
-
-  Serial.println("Please set the time");
+  setup_sensors();
 }
 
 void loop()
