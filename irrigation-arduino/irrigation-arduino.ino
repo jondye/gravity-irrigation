@@ -2,37 +2,38 @@
 #include <SerialCommand.h>
 #include <Servo.h>
 #include <Time.h>
+#include <TimeAlarms.h>
 #include <Wire.h>  
 #include <DS3232RTC.h>
 #include "Tap.h"
+#include "Parameters.h"
 
-enum
+enum PinFunctions
 {
-  SERVO_PIN = 3,
   POWER_PIN = 2,
+  SERVO_PIN = 3,
+  ENCODER_PIN_A = 4,
+  LCD_LED_PIN = 5,
   BUTT_NOT_EMPTY_PIN = 6,
+  ENCODER_PIN_B = 7,
   TANK_NOT_FULL_PIN = 8,
+  BUTTON_PIN_A = 12,
+  BUTTON_PIN_B = 13,
   PUMP_SUPPLY_PIN = A1,
   SERVO_SUPPLY_PIN = A3
-
-};
-
-enum
-{
-  PARAM_TAP_OPEN_POSITION = 0,
-  PARAM_TAP_CLOSE_POSITION = 1
 };
 
 SerialCommand sCmd;
 Tap tap(SERVO_PIN);
 
-void output_message(const char * message)
+void debug(const char *message)
 {
-  Serial.println(message);
+  Serial.print(message);
 }
 
 void setup_power()
 {
+  debug("Setting up power");
   digitalWrite(POWER_PIN, 0);
   pinMode(POWER_PIN, OUTPUT);
 }
@@ -53,7 +54,7 @@ void power_status()
   message += pump_supply();
   message += " 5v: ";
   message += servo_supply();
-  output_message(message.c_str());
+  debug(message.c_str());
 }
 
 void power_on()
@@ -68,6 +69,7 @@ void power_off()
 
 void setup_sensors()
 {
+  debug("Setting sensors");
   pinMode(BUTT_NOT_EMPTY_PIN, INPUT);
   pinMode(TANK_NOT_FULL_PIN, INPUT);
 }
@@ -90,39 +92,39 @@ void sensor_state()
   } else {
     message += "    full";
   }
-  output_message(message.c_str());
+  debug(message.c_str());
 }
 
 void open_tap()
 {
-  output_message("Opening tap");
+  debug("Opening tap");
   tap.open();
 }
 
 void close_tap()
 {
-  output_message("Closing tap");
+  debug("Closing tap");
   tap.close();
 }
 
 void set_tap_open()
 {
   const byte position = atoi(sCmd.next());
-  EEPROM.update(PARAM_TAP_OPEN_POSITION, position);
+  Parameters::tapOpenPosition(position);
   tap.open_position(position);
-  String message("Tap open pos\nset to ");
+  String message("Tap open position set to ");
   message += String(position);
-  output_message(message.c_str());
+  debug(message.c_str());
 }
 
 void set_tap_close()
 {
   const byte position = atoi(sCmd.next());
-  EEPROM.update(PARAM_TAP_CLOSE_POSITION, position);
+  Parameters::tapClosePosition(position);
   tap.close_position(position);
-  String message("Tap close pos\nset to ");
+  String message("Tap close position set to ");
   message += String(position);
-  output_message(message.c_str());
+  debug(message.c_str());
 }
 
 void get_time()
@@ -131,7 +133,7 @@ void get_time()
   snprintf(
     message, sizeof(message), "Time is %04u-%02u-%02uT%02u:%02u:%02u", 
     year(), month(), day(), hour(), minute(), second());
-  output_message(message);
+  debug(message);
 }
 
 void set_time()
@@ -153,13 +155,13 @@ void time_status()
   switch(timeStatus())
   {
     case timeNotSet:
-      output_message("Time not set");
+      debug("Time not set");
       break;
     case timeSet:
-      output_message("Time set");
+      debug("Time set");
       break;
     case timeNeedsSync:
-      output_message("Time needs sync");
+      debug("Time needs sync");
       break;
   }
 }
@@ -170,42 +172,195 @@ void unrecognized_command(const char *s)
   Serial.println(s);
 }
 
-void load_params()
+void setup_clock()
 {
-  tap.open_position(EEPROM.read(PARAM_TAP_OPEN_POSITION));
-  tap.close_position(EEPROM.read(PARAM_TAP_CLOSE_POSITION));
+  debug("Setting up RTC");
+  setSyncProvider(RTC.get);
+  if (timeStatus() != timeSet) {
+    debug("Time not set");
+  } else {
+    get_time();
+  }
 }
 
-enum State {
-  WAITING,
-  POWER_ON,
-  FILLING,
-  ERROR
+class Context;
+
+class State
+{
+public:
+  virtual void enter(Context &) {}
+  virtual void exit(Context &) {}
+  virtual void timeout(Context &) {}
+  virtual void alarm(Context &) {}
+  virtual void powerGood(Context &) {}
+  virtual void buttEmpty(Context &) {}
+  virtual void tankFull(Context &) {}
 };
 
-State state = WAITING;
-long endTime = 0;
-
-bool timeout()
+class Context
 {
-  return (long)(millis() - endTime) >= 0;
+  State * state;
+  unsigned long endTime;
+
+public:
+  Context(State &start) : state(&start), endTime(0) {}
+  void tick()
+  {
+    if ((long)(endTime - millis()) < 0)
+    {
+      state->timeout(*this);
+    }
+  }
+
+  void setState(State &s, unsigned long timeout)
+  {
+    endTime = millis() + timeout;
+    state->exit(*this);
+    state = &s;
+    state->enter(*this);
+  }
+
+  void alarm() { state->alarm(*this); }
+  void powerGood() { state->powerGood(*this); }
+  void buttEmpty() { state->buttEmpty(*this); }
+  void tankFull() { state->tankFull(*this); }
+};
+
+class Waiting : public State
+{
+  void alarm(Context &);
+} waiting;
+
+class PoweringOn : public State
+{
+  void enter(Context &);
+  void powerGood(Context &);
+  void timeout(Context &);
+} poweringOn;
+
+class Filling : public State
+{
+  void enter(Context &);
+  void buttEmpty(Context &context);
+  void tankFull(Context &context);
+  void timeout(Context &constext);
+} filling;
+
+class Watering : public State
+{
+  void enter(Context &);
+  void timeout(Context &);
+  void exit(Context &);
+} watering;
+
+class Error : public State
+{
+} error;
+
+void Waiting::alarm(Context &context)
+{
+  context.setState(poweringOn, 5000);
 }
 
-void setState(State s, long timeout)
+void PoweringOn::enter(Context &context)
 {
-  endTime = millis() + timeout;
-  state = s;
+  debug("PoweringOn::enter");
+  power_on();
 }
+
+void PoweringOn::powerGood(Context &context)
+{
+  debug("PoweringOn::powerGood");
+  // TODO this should be the filling time
+  context.setState(filling, 10000);
+}
+
+void PoweringOn::timeout(Context &context)
+{
+  debug("PoweringOn::timeout");
+  power_off();
+  debug("Failed power on");
+  context.setState(error, 0);
+}
+
+void Filling::enter(Context &context)
+{
+  debug("Filling::enter");
+  tap.close();
+}
+
+void Filling::buttEmpty(Context &context)
+{
+  debug("Filling::buttEmpty");
+  // TODO this should be the emptying time
+  context.setState(watering, 10000);
+}
+
+void Filling::tankFull(Context &context)
+{
+  debug("Filling::tankFull");
+  // TODO this should be the watering time!
+  context.setState(watering, 10000);
+}
+
+void Filling::timeout(Context &context)
+{
+  debug("Filling::timeout");
+  // TODO this should be the emptying time
+  context.setState(watering, 10000);
+}
+
+void Watering::enter(Context &context)
+{
+  debug("Watering::enter");
+  tap.open();
+}
+
+void Watering::timeout(Context &context)
+{
+  debug("Watering::timeout");
+  context.setState(waiting, 0);
+}
+
+void Watering::exit(Context &context)
+{
+  debug("Watering::exit");
+  power_off();
+}
+
+Context context(waiting);
 
 void start_watering()
 {
-  output_message("Watering...\nPowering on");
-  power_on();
-  setState(POWER_ON, 5000);
+  context.alarm();
+}
+
+void load_params()
+{
+  debug("Loading parameters");
+  tap.open_position(Parameters::tapOpenPosition());
+  tap.close_position(Parameters::tapClosePosition());
+  Alarm.alarmRepeat(
+      Parameters::alarmHours(),
+      Parameters::alarmMinutes(),
+      0,
+      &start_watering);
+}
+
+void set_alarm()
+{
+  const byte hours = atoi(sCmd.next());
+  const byte minutes = atoi(sCmd.next());
+  Parameters::alarmTime(hours, minutes);
+  Alarm.alarmRepeat(hours, minutes, 0, &start_watering);
+  char message[20];
+  snprintf(message, sizeof(message), "Alaram set to %2u:%02u", (unsigned int)hours, (unsigned int)minutes);
+  debug(message);
 }
 
 void setup_serial()
 {
+  debug("Setting up serial");
   sCmd.addCommand("opentap", open_tap);
   sCmd.addCommand("closetap", close_tap);
   sCmd.addCommand("settapopen", set_tap_open);
@@ -218,17 +373,8 @@ void setup_serial()
   sCmd.addCommand("powerstatus", power_status);
   sCmd.addCommand("sensors", sensor_state);
   sCmd.addCommand("water", start_watering);
+  sCmd.addCommand("setalarm", set_alarm);
   sCmd.setDefaultHandler(unrecognized_command);
-}
-
-void setup_clock()
-{
-  setSyncProvider(RTC.get);
-  if (timeStatus() != timeSet) {
-    output_message("Time not set");
-  } else {
-    get_time();
-  }
 }
 
 void setup()
@@ -246,24 +392,17 @@ void loop()
 {
   sCmd.readSerial();
   tap.tick();
+  context.tick();
 
-  switch (state) {
-    case WAITING:
-      break;
-    case POWER_ON:
-      if (pump_supply() > 10.0 && servo_supply() > 4.0) {
-        output_message("Watering...\nFilling tank");
-        tap.close();
-        setState(FILLING, 1800000);
-      } else if (timeout()) {
-        output_message("ERROR: failed\nto power on");
-        setState(ERROR, 0);
-      }
-      break;
-    case FILLING:
-      break;
-    case ERROR:
-      power_off();
-      break;
+  if (pump_supply() > 10.0 && servo_supply() > 4.0) {
+    context.powerGood();
   }
+  if (!digitalRead(BUTT_NOT_EMPTY_PIN)) {
+    context.buttEmpty();
+  }
+  if (!digitalRead(TANK_NOT_FULL_PIN)) {
+    context.tankFull();
+  }
+
+  Alarm.delay(10);
 }
