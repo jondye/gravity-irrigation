@@ -1,5 +1,4 @@
 #include <EEPROM.h>
-#include <SerialCommand.h>
 #include <Servo.h>
 #include <Time.h>
 #include <TimeAlarms.h>
@@ -7,6 +6,7 @@
 #include <DS3232RTC.h>
 #include "Tap.h"
 #include "Parameters.h"
+#include "SerialDebug.h"
 
 enum PinFunctions
 {
@@ -23,13 +23,7 @@ enum PinFunctions
   SERVO_SUPPLY_PIN = A3
 };
 
-SerialCommand sCmd;
 Tap tap(SERVO_PIN);
-
-void debug(const char *message)
-{
-  Serial.print(message);
-}
 
 void setup_power()
 {
@@ -109,7 +103,7 @@ void close_tap()
 
 void set_tap_open()
 {
-  const byte position = atoi(sCmd.next());
+  const byte position = next_param();
   Parameters::tapOpenPosition(position);
   tap.open_position(position);
   String message("Tap open position set to ");
@@ -119,7 +113,7 @@ void set_tap_open()
 
 void set_tap_close()
 {
-  const byte position = atoi(sCmd.next());
+  const byte position = next_param();
   Parameters::tapClosePosition(position);
   tap.close_position(position);
   String message("Tap close position set to ");
@@ -139,12 +133,12 @@ void get_time()
 void set_time()
 {
   TimeElements time = {};
-  time.Year = atoi(sCmd.next()) - 1970;
-  time.Month = atoi(sCmd.next());
-  time.Day = atoi(sCmd.next());
-  time.Hour = atoi(sCmd.next());
-  time.Minute = atoi(sCmd.next());
-  time.Second = atoi(sCmd.next());
+  time.Year = next_param() - 1970;
+  time.Month = next_param();
+  time.Day = next_param();
+  time.Hour = next_param();
+  time.Minute = next_param();
+  time.Second = next_param();
   const time_t tt = makeTime(time);
   RTC.set(tt);
   setTime(tt);
@@ -164,12 +158,6 @@ void time_status()
       debug("Time needs sync");
       break;
   }
-}
-
-void unrecognized_command(const char *s)
-{
-  Serial.println("I didn't understand");
-  Serial.println(s);
 }
 
 void setup_clock()
@@ -349,8 +337,8 @@ void load_params()
 
 void set_alarm()
 {
-  const byte hours = atoi(sCmd.next());
-  const byte minutes = atoi(sCmd.next());
+  const byte hours = next_param();
+  const byte minutes = next_param();
   Parameters::alarmTime(hours, minutes);
   Alarm.alarmRepeat(hours, minutes, 0, &start_watering);
   char message[20];
@@ -358,31 +346,27 @@ void set_alarm()
   debug(message);
 }
 
-void setup_serial()
-{
-  debug("Setting up serial");
-  sCmd.addCommand("opentap", open_tap);
-  sCmd.addCommand("closetap", close_tap);
-  sCmd.addCommand("settapopen", set_tap_open);
-  sCmd.addCommand("settapclose", set_tap_close);
-  sCmd.addCommand("settime", set_time);
-  sCmd.addCommand("gettime", get_time);
-  sCmd.addCommand("timestatus", time_status);
-  sCmd.addCommand("poweron", power_on);
-  sCmd.addCommand("poweroff", power_off);
-  sCmd.addCommand("powerstatus", power_status);
-  sCmd.addCommand("sensors", sensor_state);
-  sCmd.addCommand("water", start_watering);
-  sCmd.addCommand("setalarm", set_alarm);
-  sCmd.setDefaultHandler(unrecognized_command);
-}
-
 void setup()
 {
-  Serial.begin(9600);
-
+  Command commands[] = 
+  {
+    {"opentap", &open_tap},
+    {"closetap", &close_tap},
+    {"settapopen", &set_tap_open},
+    {"settapclose", &set_tap_close},
+    {"settime", &set_time},
+    {"gettime", &get_time},
+    {"timestatus", &time_status},
+    {"poweron", &power_on},
+    {"poweroff", &power_off},
+    {"powerstatus", &power_status},
+    {"sensors", &sensor_state},
+    {"water", &start_watering},
+    {"setalarm", &set_alarm},
+    {0, 0}
+  };
+  setup_serial(commands);
   setup_clock();
-  setup_serial();
   load_params();
   setup_power();
   setup_sensors();
@@ -390,7 +374,7 @@ void setup()
 
 void loop()
 {
-  sCmd.readSerial();
+  serial_tick();
   tap.tick();
   context.tick();
 
