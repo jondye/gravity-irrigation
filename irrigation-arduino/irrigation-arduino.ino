@@ -7,6 +7,7 @@
 #include "Tap.h"
 #include "Parameters.h"
 #include "SerialDebug.h"
+#include "Power.h"
 
 enum PinFunctions
 {
@@ -24,41 +25,15 @@ enum PinFunctions
 };
 
 Tap tap(SERVO_PIN);
-
-void setup_power()
-{
-  debug("Setting up power");
-  digitalWrite(POWER_PIN, 0);
-  pinMode(POWER_PIN, OUTPUT);
-}
-
-float pump_supply()
-{
-  return analogRead(PUMP_SUPPLY_PIN) * (12.0 / 1023.0);
-}
-
-float servo_supply()
-{
-  return analogRead(SERVO_SUPPLY_PIN) * (5.0 / 1023.0);
-}
+Power power(POWER_PIN, PUMP_SUPPLY_PIN, SERVO_SUPPLY_PIN);
 
 void power_status()
 {
   String message("12v: ");
-  message += pump_supply();
+  message += power.pumpSupply();
   message += " 5v: ";
-  message += servo_supply();
+  message += power.servoSupply();
   debug(message.c_str());
-}
-
-void power_on()
-{
-  digitalWrite(POWER_PIN, 1);
-}
-
-void power_off()
-{
-  digitalWrite(POWER_PIN, 0);
 }
 
 void setup_sensors()
@@ -71,7 +46,7 @@ void setup_sensors()
 void sensor_state()
 {
   String message("BUTT: ");
-  if (pump_supply() < 10) {
+  if (power.pumpSupply() < 10) {
     message += "  unknown";
   } else if (digitalRead(BUTT_NOT_EMPTY_PIN)) {
     message += "not empty";
@@ -79,7 +54,7 @@ void sensor_state()
     message += "    empty";
   }
   message += " TANK: ";
-  if (pump_supply() < 10) {
+  if (power.pumpSupply() < 10) {
     message += " unknown";
   } else if (digitalRead(TANK_NOT_FULL_PIN)) {
     message += "not full";
@@ -87,18 +62,6 @@ void sensor_state()
     message += "    full";
   }
   debug(message.c_str());
-}
-
-void open_tap()
-{
-  debug("Opening tap");
-  tap.open();
-}
-
-void close_tap()
-{
-  debug("Closing tap");
-  tap.close();
 }
 
 void set_tap_open()
@@ -253,7 +216,7 @@ void Waiting::alarm(Context &context)
 void PoweringOn::enter(Context &context)
 {
   debug("PoweringOn::enter");
-  power_on();
+  power.on();
 }
 
 void PoweringOn::powerGood(Context &context)
@@ -266,7 +229,7 @@ void PoweringOn::powerGood(Context &context)
 void PoweringOn::timeout(Context &context)
 {
   debug("PoweringOn::timeout");
-  power_off();
+  power.off();
   debug("Failed power on");
   context.setState(error, 0);
 }
@@ -313,7 +276,7 @@ void Watering::timeout(Context &context)
 void Watering::exit(Context &context)
 {
   debug("Watering::exit");
-  power_off();
+  power.off();
 }
 
 Context context(waiting);
@@ -346,6 +309,12 @@ void set_alarm()
   debug(message);
 }
 
+
+void open_tap() { tap.open(); }
+void close_tap() { tap.close(); }
+void power_on() { power.on(); }
+void power_off() { power.off(); }
+
 void setup()
 {
   Command commands[] = 
@@ -367,8 +336,8 @@ void setup()
   };
   setup_serial(commands);
   setup_clock();
+  power.setup();
   load_params();
-  setup_power();
   setup_sensors();
 }
 
@@ -378,7 +347,7 @@ void loop()
   tap.tick();
   context.tick();
 
-  if (pump_supply() > 10.0 && servo_supply() > 4.0) {
+  if (power.pumpSupply() > 10.0 && power.servoSupply() > 4.0) {
     context.powerGood();
   }
   if (!digitalRead(BUTT_NOT_EMPTY_PIN)) {
