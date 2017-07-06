@@ -5,7 +5,7 @@
 
 inline void debug(const char *message)
 {
-  Serial.print(message);
+  Serial.println(message);
 }
 
 typedef void (*Callback)();

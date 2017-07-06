@@ -2,7 +2,7 @@
 #include <Servo.h>
 #include <Time.h>
 #include <TimeAlarms.h>
-#include <Wire.h>  
+#include <Wire.h>
 #include <DS3232RTC.h>
 #include "Tap.h"
 #include "Parameters.h"
@@ -17,7 +17,6 @@ enum PinFunctions
   LCD_LED_PIN = 5,
   BUTT_NOT_EMPTY_PIN = 6,
   ENCODER_PIN_B = 7,
-  TANK_NOT_FULL_PIN = 8,
   BUTTON_PIN_A = 12,
   BUTTON_PIN_B = 13,
   PUMP_SUPPLY_PIN = A1,
@@ -40,7 +39,6 @@ void setup_sensors()
 {
   debug("Setting sensors");
   pinMode(BUTT_NOT_EMPTY_PIN, INPUT);
-  pinMode(TANK_NOT_FULL_PIN, INPUT);
 }
 
 void sensor_state()
@@ -52,14 +50,6 @@ void sensor_state()
     message += "not empty";
   } else {
     message += "    empty";
-  }
-  message += " TANK: ";
-  if (power.pumpSupply() < 10) {
-    message += " unknown";
-  } else if (digitalRead(TANK_NOT_FULL_PIN)) {
-    message += "not full";
-  } else {
-    message += "    full";
   }
   debug(message.c_str());
 }
@@ -88,7 +78,7 @@ void get_time()
 {
   char message[28];
   snprintf(
-    message, sizeof(message), "Time is %04u-%02u-%02uT%02u:%02u:%02u", 
+    message, sizeof(message), "Time is %04u-%02u-%02uT%02u:%02u:%02u",
     year(), month(), day(), hour(), minute(), second());
   debug(message);
 }
@@ -145,7 +135,7 @@ public:
   virtual void alarm(Context &) {}
   virtual void powerGood(Context &) {}
   virtual void buttEmpty(Context &) {}
-  virtual void tankFull(Context &) {}
+  virtual void button(Context &){}
 };
 
 class Context
@@ -174,12 +164,13 @@ public:
   void alarm() { state->alarm(*this); }
   void powerGood() { state->powerGood(*this); }
   void buttEmpty() { state->buttEmpty(*this); }
-  void tankFull() { state->tankFull(*this); }
+  void button() { state->button(*this); }
 };
 
 class Waiting : public State
 {
   void alarm(Context &);
+  void button(Context &);
 } waiting;
 
 class PoweringOn : public State
@@ -189,20 +180,19 @@ class PoweringOn : public State
   void timeout(Context &);
 } poweringOn;
 
-class Filling : public State
-{
-  void enter(Context &);
-  void buttEmpty(Context &context);
-  void tankFull(Context &context);
-  void timeout(Context &constext);
-} filling;
-
 class Watering : public State
 {
   void enter(Context &);
   void timeout(Context &);
-  void exit(Context &);
+  void buttEmpty(Context &);
+  void button(Context &);
 } watering;
+
+class Stopping : public State
+{
+  void enter(Context &);
+  void exit(Context &);
+} stopping;
 
 class Error : public State
 {
@@ -210,6 +200,13 @@ class Error : public State
 
 void Waiting::alarm(Context &context)
 {
+  debug("Waiting::alarm");
+  context.setState(poweringOn, 5000);
+}
+
+void Waiting::button(Context &context)
+{
+  debug("Waiting::button");
   context.setState(poweringOn, 5000);
 }
 
@@ -223,7 +220,7 @@ void PoweringOn::powerGood(Context &context)
 {
   debug("PoweringOn::powerGood");
   // TODO this should be the filling time
-  context.setState(filling, 10000);
+  context.setState(watering, 420000);
 }
 
 void PoweringOn::timeout(Context &context)
@@ -234,48 +231,39 @@ void PoweringOn::timeout(Context &context)
   context.setState(error, 0);
 }
 
-void Filling::enter(Context &context)
-{
-  debug("Filling::enter");
-  tap.close();
-}
-
-void Filling::buttEmpty(Context &context)
-{
-  debug("Filling::buttEmpty");
-  // TODO this should be the emptying time
-  context.setState(watering, 10000);
-}
-
-void Filling::tankFull(Context &context)
-{
-  debug("Filling::tankFull");
-  // TODO this should be the watering time!
-  context.setState(watering, 10000);
-}
-
-void Filling::timeout(Context &context)
-{
-  debug("Filling::timeout");
-  // TODO this should be the emptying time
-  context.setState(watering, 10000);
-}
-
 void Watering::enter(Context &context)
 {
   debug("Watering::enter");
   tap.open();
 }
 
+void Watering::buttEmpty(Context &context)
+{
+  debug("Watering::buttEmpty");
+  context.setState(stopping, 5000);
+}
+
 void Watering::timeout(Context &context)
 {
   debug("Watering::timeout");
-  context.setState(waiting, 0);
+  context.setState(stopping, 5000);
 }
 
-void Watering::exit(Context &context)
+void Watering::button(Context &context)
 {
-  debug("Watering::exit");
+  debug("Watering::button");
+  context.setState(stopping, 5000);
+}
+
+void Stopping::enter(Context &context)
+{
+  debug("Stopping::enter");
+  tap.close();
+}
+
+void Stopping::exit(Context &context)
+{
+  debug("Stopping::exit");
   power.off();
 }
 
@@ -291,11 +279,11 @@ void load_params()
   debug("Loading parameters");
   tap.open_position(Parameters::tapOpenPosition());
   tap.close_position(Parameters::tapClosePosition());
-  Alarm.alarmRepeat(
-      Parameters::alarmHours(),
-      Parameters::alarmMinutes(),
-      0,
-      &start_watering);
+//  Alarm.alarmRepeat(
+//      Parameters::alarmHours(),
+//      Parameters::alarmMinutes(),
+//      0,
+//      &start_watering);
 }
 
 void set_alarm()
@@ -303,9 +291,9 @@ void set_alarm()
   const byte hours = next_param();
   const byte minutes = next_param();
   Parameters::alarmTime(hours, minutes);
-  Alarm.alarmRepeat(hours, minutes, 0, &start_watering);
+//  Alarm.alarmRepeat(hours, minutes, 0, &start_watering);
   char message[20];
-  snprintf(message, sizeof(message), "Alaram set to %2u:%02u", (unsigned int)hours, (unsigned int)minutes);
+  snprintf(message, sizeof(message), "Alarm set to %2u:%02u", (unsigned int)hours, (unsigned int)minutes);
   debug(message);
 }
 
@@ -317,7 +305,7 @@ void power_off() { power.off(); }
 
 void setup()
 {
-  Command commands[] = 
+  Command commands[] =
   {
     {"opentap", &open_tap},
     {"closetap", &close_tap},
@@ -339,7 +327,14 @@ void setup()
   power.setup();
   load_params();
   setup_sensors();
+
+
+  pinMode(BUTTON_PIN_A, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_B, OUTPUT);
+  digitalWrite(BUTTON_PIN_B, 0);
 }
+
+bool button = false;
 
 void loop()
 {
@@ -347,14 +342,19 @@ void loop()
   tap.tick();
   context.tick();
 
-  if (power.pumpSupply() > 10.0 && power.servoSupply() > 4.0) {
+  if (power.pumpSupply() > 10.0 && power.servoSupply() > 4.5) {
     context.powerGood();
   }
   if (!digitalRead(BUTT_NOT_EMPTY_PIN)) {
     context.buttEmpty();
   }
-  if (!digitalRead(TANK_NOT_FULL_PIN)) {
-    context.tankFull();
+  if (!digitalRead(BUTTON_PIN_A)) {
+    if (!button) {
+      context.button();
+      button = true;
+    }
+  } else {
+    button = false;
   }
 
   Alarm.delay(10);
